@@ -61,6 +61,7 @@ def ingest_repo(repo_path: str) -> str:
                 "$set": {
                     "repo_id": repo_id,
                     "path": rel_path,
+                    "repo_root": abs_path,
                     "deps": result.third_party_deps,
                     "local_imports": result.local_imports,
                     "pinned_versions": {

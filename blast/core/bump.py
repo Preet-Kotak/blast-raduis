@@ -264,19 +264,29 @@ def _topological_fix_order(repo_id: str, paths: set[str]) -> list[str]:
 
 def _find_repo_root(repo_id: str) -> str | None:
     """
-    Recover the repo root directory from the repo_id.
-    The repo_id is an md5 of the absolute path — we can't reverse it,
-    but we can check common locations relative to the working directory.
+    Recover the repo root directory for a given repo_id.
+    Reads the stored repo_root field from MongoDB first,
+    then falls back to hashing subdirs of cwd.
     """
     import os, hashlib
+    # Primary: read from MongoDB
+    try:
+        doc = files_col().find_one(
+            {"repo_id": repo_id, "repo_root": {"$exists": True}},
+            {"repo_root": 1}
+        )
+        if doc and doc.get("repo_root") and os.path.isdir(doc["repo_root"]):
+            return doc["repo_root"]
+    except Exception:
+        pass
+
+    # Fallback: check subdirs of cwd
     cwd = os.getcwd()
-    # Check direct subdirs of cwd
     for entry in os.listdir(cwd):
         candidate = os.path.join(cwd, entry)
         if os.path.isdir(candidate):
             if hashlib.md5(candidate.encode()).hexdigest()[:12] == repo_id:
                 return candidate
-    # Check cwd itself
     if hashlib.md5(cwd.encode()).hexdigest()[:12] == repo_id:
         return cwd
     return None

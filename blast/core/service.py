@@ -39,21 +39,30 @@ def list_repos() -> list[dict]:
 
     Each dict has:
         repo_id:    stable hash identifier
-        path:       first file path seen (proxy for repo location)
+        path:       absolute root path of the repo
         file_count: number of files ingested
     """
     raw = _list_repos()
 
-    # Enrich with a human-readable path hint from the files collection
     enriched = []
     for r in raw:
+        # Use stored repo_root; fall back to relative path of first file
         sample = files_col().find_one(
             {"repo_id": r["repo_id"]},
-            {"path": 1, "_id": 0}
+            {"repo_root": 1, "path": 1, "_id": 0}
         )
+        if sample and sample.get("repo_root"):
+            display_path = sample["repo_root"]
+        elif sample:
+            # Old data without repo_root — show parent of first file as hint
+            import os
+            display_path = os.path.dirname(sample["path"]) or sample["path"]
+        else:
+            display_path = r["repo_id"]
+
         enriched.append({
             "repo_id": r["repo_id"],
-            "path": sample["path"] if sample else r["repo_id"],
+            "path": display_path,
             "file_count": r.get("file_count", 0),
         })
     return enriched
@@ -164,3 +173,103 @@ def get_package_versions(dep: str) -> list[str]:
         List of version strings, empty if package not found.
     """
     return pypi_diff.get_package_versions(dep)
+
+
+# ── bonus: requirements dashboard ─────────────────────────────────────────────
+
+def scan_requirements(repo_id: str, repo_path: str) -> list[dict]:
+    """
+    Read requirements.txt from repo_path, find latest stable version of each
+    dep on PyPI, run blast radius for each one, and return a risk summary.
+
+    Args:
+        repo_id:   Repo identifier from ingest_repo().
+        repo_path: Absolute path to the repo root (to find requirements.txt).
+
+    Returns:
+        List of dicts sorted by risk (HIGH first):
+        [
+          {
+            "dep":          "pydantic",
+            "current_ver":  "1.10.0",
+            "latest_ver":   "2.14.2",
+            "is_latest":    False,
+            "affected":     9,
+            "direct":       4,
+            "transitive":   5,
+            "risk":         "HIGH",   # HIGH / MEDIUM / SAFE
+            "bump_id":      "abc123",
+          }
+        ]
+    """
+    import os
+    from blast.core.ingest import _read_requirements
+    from blast.core.pypi_diff import get_package_versions
+
+    req_path = os.path.join(repo_path, "requirements.txt")
+    if not os.path.exists(req_path):
+        return []
+
+    pinned = _read_requirements(repo_path)
+    results = []
+
+    for dep, current_ver in pinned.items():
+        versions = get_package_versions(dep)
+        if not versions:
+            # Not on PyPI or network unavailable
+            results.append({
+                "dep": dep, "current_ver": current_ver,
+                "latest_ver": "unknown", "is_latest": False,
+                "affected": 0, "direct": 0, "transitive": 0,
+                "risk": "UNKNOWN", "bump_id": None,
+            })
+            continue
+
+        latest_ver = versions[0]
+        is_latest  = current_ver == latest_ver
+
+        if is_latest:
+            results.append({
+                "dep": dep, "current_ver": current_ver,
+                "latest_ver": latest_ver, "is_latest": True,
+                "affected": 0, "direct": 0, "transitive": 0,
+                "risk": "UP TO DATE", "bump_id": None,
+            })
+            continue
+
+        # Run blast radius to latest
+        try:
+            bump   = simulate_bump(repo_id, dep, latest_ver)
+            aff    = get_affected_files(bump["bump_id"])
+            direct = sum(1 for f in aff if f["label"] == "DIRECT")
+            trans  = sum(1 for f in aff if f["label"] == "TRANSITIVE")
+            total  = direct + trans
+
+            if total == 0:
+                risk = "SAFE"
+            elif direct >= 3 or total >= 6:
+                risk = "HIGH"
+            elif direct >= 1:
+                risk = "MEDIUM"
+            else:
+                risk = "LOW"
+
+            results.append({
+                "dep": dep, "current_ver": current_ver,
+                "latest_ver": latest_ver, "is_latest": False,
+                "affected": total, "direct": direct,
+                "transitive": trans, "risk": risk,
+                "bump_id": bump["bump_id"],
+            })
+        except Exception:
+            results.append({
+                "dep": dep, "current_ver": current_ver,
+                "latest_ver": latest_ver, "is_latest": False,
+                "affected": 0, "direct": 0, "transitive": 0,
+                "risk": "ERROR", "bump_id": None,
+            })
+
+    # Sort: HIGH → MEDIUM → LOW → SAFE → UP TO DATE → UNKNOWN/ERROR
+    order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "SAFE": 3, "UP TO DATE": 4, "UNKNOWN": 5, "ERROR": 6}
+    results.sort(key=lambda x: order.get(x["risk"], 99))
+    return results

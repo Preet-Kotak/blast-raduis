@@ -71,9 +71,28 @@ def get_package_versions(dep: str) -> list[str]:
             return []
         data = resp.json()
         versions = list(data.get("releases", {}).keys())
-        # Sort newest first using simple string sort (good enough for semver)
-        versions.sort(key=lambda v: [int(x) for x in v.split(".")
-                      if x.isdigit()], reverse=True)
+
+        # Filter to stable releases only (no alpha/beta/rc/dev)
+        import re as _re
+        versions = [
+            v for v in versions
+            if not _re.search(r'(a|b|rc|dev|post|alpha|beta)\d*', v, _re.IGNORECASE)
+        ]
+
+        # Sort using proper semantic versioning (newest first)
+        def _ver_key(v: str):
+            parts = []
+            for part in v.replace("-", ".").split("."):
+                num = ""
+                for ch in part:
+                    if ch.isdigit():
+                        num += ch
+                    else:
+                        break
+                parts.append(int(num) if num else 0)
+            return parts
+
+        versions.sort(key=_ver_key, reverse=True)
         return versions
     except Exception:
         return []
