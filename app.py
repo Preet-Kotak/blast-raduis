@@ -639,20 +639,31 @@ if st.session_state.result is None or not st.session_state.show_results:
                 actual_path = repo_path_input
                 if repo_path_input.startswith("http"):
                     st.info("📥 Cloning GitHub repository...")
-                    import tempfile
                     import subprocess
+                    import hashlib
                     
                     try:
-                        with tempfile.TemporaryDirectory() as tmpdir:
-                            # Clone the repo
+                        # Use a persistent cache directory
+                        cache_dir = os.path.join(os.path.expanduser("~"), ".blast_radius_cache")
+                        os.makedirs(cache_dir, exist_ok=True)
+                        
+                        # Hash the URL to create a unique directory name
+                        url_hash = hashlib.md5(repo_path_input.encode()).hexdigest()[:8]
+                        clone_path = os.path.join(cache_dir, url_hash)
+                        
+                        # Clone if not already cached
+                        if not os.path.exists(clone_path):
                             subprocess.run(
-                                ["git", "clone", repo_path_input, tmpdir],
+                                ["git", "clone", repo_path_input, clone_path],
                                 check=True,
                                 capture_output=True,
                                 timeout=30
                             )
-                            actual_path = tmpdir
-                            run_simulation(actual_path, dep_input, fver_input or "unknown", to_ver_input)
+                        else:
+                            st.caption("✅ Using cached repository")
+                        
+                        actual_path = clone_path
+                        run_simulation(actual_path, dep_input, fver_input or "unknown", to_ver_input)
                     except subprocess.TimeoutExpired:
                         st.error("❌ Clone timeout (>30s) - repo too large")
                     except subprocess.CalledProcessError as e:
