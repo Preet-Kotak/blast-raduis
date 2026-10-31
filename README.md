@@ -239,15 +239,7 @@ Found a bug? Have a suggestion? [Open an issue](https://github.com/Preet-Kotak/b
 
 ---
 
-## Team
 
-**Blast Radius** was built by **Team dotDBA** at [UNCHARTED 2026](https://uncharted2026.com/) (Track 3: Developer Tools):
-
-- **Krishna Kejriwal** — Backend & MongoDB architecture
-- **Preet Kotak** — Full-stack & deployment
-- **Dhruneel Prajapati** — Graph analysis & fix prioritization
-
----
 
 ## FAQ
 
