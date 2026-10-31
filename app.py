@@ -629,15 +629,40 @@ if st.session_state.result is None or not st.session_state.show_results:
     with col_btn2:
         if st.button("💥 Run Blast Radius Analysis", type="primary", use_container_width=True):
             if not repo_path_input:
-                st.warning("⚠️ Please enter a repository path")
+                st.warning("⚠️ Please enter a repository path or GitHub URL")
             elif not dep_input:
                 st.warning("⚠️ Please enter a dependency name")
             elif not to_ver_input:
                 st.warning("⚠️ Please enter a target version")
-            elif not os.path.exists(repo_path_input):
-                st.error(f"❌ Repository not found: `{repo_path_input}`")
             else:
-                run_simulation(repo_path_input, dep_input, fver_input or "unknown", to_ver_input)
+                # Handle GitHub URLs
+                actual_path = repo_path_input
+                if repo_path_input.startswith("http"):
+                    st.info("📥 Cloning GitHub repository...")
+                    import tempfile
+                    import subprocess
+                    
+                    try:
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            # Clone the repo
+                            subprocess.run(
+                                ["git", "clone", repo_path_input, tmpdir],
+                                check=True,
+                                capture_output=True,
+                                timeout=30
+                            )
+                            actual_path = tmpdir
+                            run_simulation(actual_path, dep_input, fver_input or "unknown", to_ver_input)
+                    except subprocess.TimeoutExpired:
+                        st.error("❌ Clone timeout (>30s) - repo too large")
+                    except subprocess.CalledProcessError as e:
+                        st.error(f"❌ Failed to clone repo: {e.stderr.decode() if e.stderr else str(e)}")
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+                elif not os.path.exists(repo_path_input):
+                    st.error(f"❌ Repository not found: `{repo_path_input}`")
+                else:
+                    run_simulation(actual_path, dep_input, fver_input or "unknown", to_ver_input)
 
     # ── Footer ──────────────────────────────────────────────────────────────────
     st.markdown("<br><br>", unsafe_allow_html=True)
