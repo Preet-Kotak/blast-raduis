@@ -555,11 +555,11 @@ if st.session_state.result is None or not st.session_state.show_results:
     with result_col2:
         st.markdown("""
         <div class="result-box" style='border-left:4px solid #8b5cf6;'>
-            <h4 style='margin:0 0 1rem 0; color:#e2e8f0;'>🗺️ Interactive Graph</h4>
+            <h4 style='margin:0 0 1rem 0; color:#e2e8f0;'>🗺️ Dependency Graph</h4>
             <ul style='color:#94a3b8; font-size:0.9rem; line-height:2; padding-left: 1.2rem; margin:0;'>
                 <li>Visual blast radius</li>
-                <li>Click nodes for details</li>
-                <li>Drag to rearrange</li>
+                <li>Hierarchical layout</li>
+                <li>Color-coded risk levels</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
