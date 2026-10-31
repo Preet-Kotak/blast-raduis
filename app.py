@@ -775,7 +775,7 @@ else:
             try:
                 graph_img = build_graph_image(affected, dep_name, result["target_version"], repo_id)
                 if graph_img:
-                    st.image(graph_img, caption="Dependency blast radius")
+                    st.image(graph_img, caption="Dependency blast radius — import dependency graph")
                 else:
                     st.info("Graph unavailable in demo mode.")
             except Exception as e:
