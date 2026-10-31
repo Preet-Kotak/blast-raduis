@@ -11,8 +11,15 @@ import os
 from typing import NamedTuple
 
 
+class NameUsage(NamedTuple):
+    name: str       # the name used (e.g. "delete", "HTTPError")
+    line: int       # 1-based line number
+    col: int        # 0-based column offset
+    snippet: str    # the source line, stripped
+
+
 class ParseResult(NamedTuple):
-    local_imports: list[str]   # relative module paths (e.g. "api.client")
+    local_imports: list[str]     # relative module paths (e.g. "api.client")
     third_party_deps: list[str]  # top-level package names (e.g. "fakehttp")
 
 
@@ -135,3 +142,75 @@ def _resolve_relative(
         return module
     base = ".".join(segments[: len(segments) - level])
     return f"{base}.{module}" if base else module
+
+
+def find_name_usages(file_path: str, names: list[str]) -> list[dict]:
+    """
+    Find every line in file_path that references any name in `names`.
+
+    Catches both attribute access (`fakehttp.delete(...)`) and direct name
+    references (`from fakehttp import delete` / `delete(...)`).
+
+    Args:
+        file_path: Path to the .py file to scan.
+        names:     List of names to look for (e.g. ["delete", "HTTPError"]).
+
+    Returns:
+        List of dicts sorted by line number:
+        [{"name": str, "line": int, "col": int, "snippet": str}]
+    """
+    if not names:
+        return []
+
+    with open(file_path, encoding="utf-8", errors="replace") as fh:
+        source = fh.read()
+    source_lines = source.splitlines()
+
+    try:
+        tree = ast.parse(source, filename=file_path)
+    except SyntaxError:
+        return []
+
+    name_set = set(names)
+    usages: list[dict] = []
+
+    for node in ast.walk(tree):
+        # Direct name reference: `delete(...)` or `x = HTTPError()`
+        if isinstance(node, ast.Name) and node.id in name_set:
+            usages.append(_make_usage(node.id, node, source_lines))
+
+        # Attribute access: `fakehttp.delete(...)` or `fakehttp.HTTPError`
+        elif isinstance(node, ast.Attribute) and node.attr in name_set:
+            usages.append(_make_usage(node.attr, node, source_lines))
+
+        # Import lines: `from fakehttp import delete, HTTPError`
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imported_name = alias.asname or alias.name
+                if alias.name in name_set or imported_name in name_set:
+                    usages.append(_make_usage(alias.name, node, source_lines))
+
+        # Plain import: `import fakehttp` (whole module import)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in name_set:
+                    usages.append(_make_usage(alias.name, node, source_lines))
+
+    # Deduplicate by (name, line) and sort
+    seen: set[tuple] = set()
+    unique: list[dict] = []
+    for u in sorted(usages, key=lambda x: x["line"]):
+        key = (u["name"], u["line"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(u)
+
+    return unique
+
+
+def _make_usage(name: str, node: ast.AST, source_lines: list[str]) -> dict:
+    """Build a usage dict from an AST node."""
+    line = getattr(node, "lineno", 0)
+    col = getattr(node, "col_offset", 0)
+    snippet = source_lines[line - 1].strip() if 0 < line <= len(source_lines) else ""
+    return {"name": name, "line": line, "col": col, "snippet": snippet}

@@ -9,7 +9,8 @@ app.py imports these seven names and calls nothing else in blast/:
     get_affected_files, get_fix_order, get_api_diff, get_bump_history
 """
 
-from blast.core import apidiff, history
+from blast.core import history
+from blast.core import pypi_diff
 from blast.core.bump import get_bump_result
 from blast.core.bump import simulate_bump as _simulate_bump
 from blast.core.db import ensure_indexes, files_col
@@ -125,16 +126,17 @@ def get_fix_order(bump_id: str) -> list[str]:
 def get_api_diff(dep: str, from_ver: str, to_ver: str) -> list[str]:
     """
     Return names removed between two versions of a dependency.
+    Fetches real package data from PyPI; falls back to fakelibs.
 
     Args:
-        dep:      Package name (e.g. "fakehttp").
-        from_ver: Old version string (e.g. "1.0").
-        to_ver:   New version string (e.g. "2.0").
+        dep:      Package name as on PyPI (e.g. "discord.py", "requests").
+        from_ver: Old version string (e.g. "1.7.3").
+        to_ver:   New version string (e.g. "2.0.0").
 
     Returns:
-        Sorted list of removed names. Empty if versions are unknown.
+        Sorted list of removed names.
     """
-    return apidiff.diff_versions(dep, from_ver, to_ver)
+    return pypi_diff.diff_versions(dep, from_ver, to_ver)
 
 
 # ── 7. get_bump_history ────────────────────────────────────────────────────────
@@ -147,3 +149,18 @@ def get_bump_history(repo_id: str, dep: str) -> list[dict]:
         List of dicts: target_version, is_safe, affected_count, ran_at.
     """
     return history.get_history(repo_id, dep)
+
+
+# ── bonus: version discovery ───────────────────────────────────────────────────
+
+def get_package_versions(dep: str) -> list[str]:
+    """
+    Return available versions for a package from PyPI, newest first.
+
+    Args:
+        dep: Package name as on PyPI.
+
+    Returns:
+        List of version strings, empty if package not found.
+    """
+    return pypi_diff.get_package_versions(dep)

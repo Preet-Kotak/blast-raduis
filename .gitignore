@@ -18,6 +18,7 @@ build/
 .vscode/
 .idea/
 
-# Test artefacts
+# Test artefacts — generated locally, never committed
 sample_repo/
+discord_bot/
 .pytest_cache/

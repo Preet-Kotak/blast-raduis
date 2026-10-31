@@ -13,7 +13,7 @@ import os
 from datetime import datetime, timezone
 
 from blast.core.db import edges_col, ensure_indexes, files_col
-from blast.core.parser import parse_file
+from blast.core.parser import find_name_usages, parse_file
 
 
 def ingest_repo(repo_path: str) -> str:
@@ -47,6 +47,12 @@ def ingest_repo(repo_path: str) -> str:
 
         # ── Upsert file node ───────────────────────────────────────────────
         doc_id = f"{repo_id}:{rel_path}"
+
+        # Find all names used from each third-party dep (for line-level reporting)
+        dep_usages: dict[str, list[dict]] = {}
+        for dep in result.third_party_deps:
+            dep_usages[dep] = find_name_usages(file_path, _dep_public_names(dep))
+
         files_col().update_one(
             {"_id": doc_id},
             {
@@ -59,6 +65,7 @@ def ingest_repo(repo_path: str) -> str:
                         dep: pinned.get(dep, "unknown")
                         for dep in result.third_party_deps
                     },
+                    "dep_usages": dep_usages,
                     "ingested_at": now,
                 }
             },
@@ -179,3 +186,17 @@ def _read_requirements(repo_root: str) -> dict[str, str]:
                 pinned[line.lower()] = "unknown"
 
     return pinned
+
+
+def _dep_public_names(dep: str) -> list[str]:
+    """
+    Return the known public names for a dep by scanning fakelibs/.
+    Falls back to just the dep name itself if fakelibs aren't present.
+    """
+    from blast.core.apidiff import _extract_public_names, _find_version_path
+    # Try v1 first (the currently installed version)
+    for ver in ("1.0", "1", "2.0", "2"):
+        path = _find_version_path(dep, ver)
+        if path:
+            return sorted(_extract_public_names(path))
+    return [dep]

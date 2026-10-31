@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from blast.core.db import bumps_col, edges_col, files_col
+from blast.core.pypi_diff import diff_versions
 
 
 @dataclass
@@ -54,26 +55,44 @@ def simulate_bump(repo_id: str, dep: str, target_version: str) -> BumpResult:
     dep_node = _find_dep_node(repo_id, dep)
 
     # ── 2. Find all files that can reach this dep node (reverse traversal) ─
-    direct_files, transitive_files = _find_affected_files(repo_id, dep_node)
+    direct_files, transitive_map = _find_affected_files(repo_id, dep_node)
+    # transitive_map: {path -> via_path} where via_path is the direct dep file it chains through
+
+    # ── 2b. Get removed names so we can attach line hits ───────────────────
+    # Use "1.0" as the from-version (what's currently pinned)
+    pinned_edge = edges_col().find_one({"repo_id": repo_id, "dep": dep}, {"version": 1})
+    from_ver = pinned_edge["version"] if pinned_edge else "1.0"
+    removed_names = diff_versions(dep, from_ver, target_version)
 
     # ── 3. Build affected list ─────────────────────────────────────────────
     affected: list[dict] = []
-    all_file_paths = list(files_col().find(
+    all_file_docs = list(files_col().find(
         {"repo_id": repo_id},
-        {"_id": 0, "path": 1}
+        {"_id": 0, "path": 1, "dep_usages": 1}
     ))
 
     direct_set = set(direct_files)
-    transitive_set = set(transitive_files) - direct_set
+    transitive_set = set(transitive_map.keys()) - direct_set
 
-    for doc in all_file_paths:
+    for doc in all_file_docs:
         path = doc["path"]
+        dep_usages = doc.get("dep_usages", {})
+
+        # Filter stored usages to only the removed names
+        raw_usages = dep_usages.get(dep, [])
+        risky_usages = [
+            u for u in raw_usages if u.get("name") in removed_names
+        ] if removed_names else raw_usages
+
         if path in direct_set:
-            affected.append({"path": path, "label": "DIRECT"})
+            affected.append({"path": path, "label": "DIRECT",
+                             "usages": risky_usages, "via": None})
         elif path in transitive_set:
-            affected.append({"path": path, "label": "TRANSITIVE"})
+            affected.append({"path": path, "label": "TRANSITIVE",
+                             "usages": [], "via": transitive_map.get(path)})
         else:
-            affected.append({"path": path, "label": "SAFE"})
+            affected.append({"path": path, "label": "SAFE",
+                             "usages": [], "via": None})
 
     # Sort: DIRECT first, then TRANSITIVE, then SAFE
     label_order = {"DIRECT": 0, "TRANSITIVE": 1, "SAFE": 2}
@@ -131,33 +150,29 @@ def _find_dep_node(repo_id: str, dep: str) -> str:
 
 def _find_affected_files(
     repo_id: str, dep_node: str
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], dict[str, str]]:
     """
     Use $graphLookup to traverse the import graph BACKWARDS from dep_node.
 
     Returns:
-        (direct_files, all_reachable_files)
-        direct_files:      files with a direct edge to dep_node
-        all_reachable:     files reachable via any path to dep_node
+        (direct_files, transitive_map)
+        direct_files:    files with a direct edge to dep_node
+        transitive_map:  {transitive_path -> nearest_direct_file it chains through}
     """
     # Direct files: edges where "to" == dep_node
     direct_edges = list(edges_col().find(
         {"repo_id": repo_id, "to": dep_node},
         {"from": 1, "_id": 0}
     ))
-    direct_files = [e["from"] for e in direct_edges]
+    direct_files = [e["from"] for e in direct_edges if "@" not in e["from"]]
 
     if not direct_files:
-        return [], []
+        return [], {}
 
-    # Use $graphLookup on edges collection starting from each direct file
-    # to find all files that transitively import those files.
-    # We traverse: startWith = direct file path, connectFromField = "to",
-    # connectToField = "from"  — this walks BACKWARDS up the import chain.
+    # $graphLookup backwards: for each direct file, find everything that
+    # imports it (directly or transitively).
     pipeline = [
-        # Seed with direct files
         {"$match": {"repo_id": repo_id, "to": dep_node}},
-        # For each direct file, walk backwards (who imports this file?)
         {
             "$graphLookup": {
                 "from": "edges",
@@ -172,21 +187,24 @@ def _find_affected_files(
         {
             "$project": {
                 "direct": "$from",
-                "ancestor_paths": "$ancestors.from",
+                "ancestors": "$ancestors.from",
             }
         },
     ]
 
-    all_reachable = set(direct_files)
+    # Build transitive_map: ancestor → the direct file it was reached from
+    transitive_map: dict[str, str] = {}
     for doc in edges_col().aggregate(pipeline):
-        all_reachable.add(doc["direct"])
-        all_reachable.update(doc.get("ancestor_paths", []))
+        direct = doc["direct"]
+        if "@" in direct:
+            continue
+        for ancestor in doc.get("ancestors", []):
+            if "@" not in ancestor and ancestor not in direct_files:
+                # Only record first-seen (shortest chain wins)
+                if ancestor not in transitive_map:
+                    transitive_map[ancestor] = direct
 
-    # Filter out virtual dep nodes (they contain "@")
-    all_reachable = {p for p in all_reachable if "@" not in p}
-    direct_set = {p for p in direct_files if "@" not in p}
-
-    return list(direct_set), list(all_reachable)
+    return direct_files, transitive_map
 
 
 def _topological_fix_order(repo_id: str, paths: set[str]) -> list[str]:
