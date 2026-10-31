@@ -21,4 +21,5 @@ build/
 # Test artefacts — generated locally, never committed
 sample_repo/
 discord_bot/
+pydantic_app/
 .pytest_cache/

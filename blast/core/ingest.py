@@ -48,10 +48,12 @@ def ingest_repo(repo_path: str) -> str:
         # ── Upsert file node ───────────────────────────────────────────────
         doc_id = f"{repo_id}:{rel_path}"
 
-        # Find all names used from each third-party dep (for line-level reporting)
+        # Find all names used from each third-party dep using fakelibs only.
+        # PyPI-based name lookup happens at bump time, not ingest time,
+        # so ingest stays fast even without a network connection.
         dep_usages: dict[str, list[dict]] = {}
         for dep in result.third_party_deps:
-            dep_usages[dep] = find_name_usages(file_path, _dep_public_names(dep))
+            dep_usages[dep] = find_name_usages(file_path, _dep_known_names(dep))
 
         files_col().update_one(
             {"_id": doc_id},
@@ -188,15 +190,20 @@ def _read_requirements(repo_root: str) -> dict[str, str]:
     return pinned
 
 
-def _dep_public_names(dep: str) -> list[str]:
+def _dep_known_names(dep: str) -> list[str]:
     """
-    Return the known public names for a dep by scanning fakelibs/.
-    Falls back to just the dep name itself if fakelibs aren't present.
+    Return known public names for a dep from fakelibs only (no network).
+    Used during ingest to find name usages without triggering PyPI downloads.
+    At bump time, pypi_diff provides the authoritative removed-name list.
     """
     from blast.core.apidiff import _extract_public_names, _find_version_path
-    # Try v1 first (the currently installed version)
     for ver in ("1.0", "1", "2.0", "2"):
         path = _find_version_path(dep, ver)
         if path:
             return sorted(_extract_public_names(path))
-    return [dep]
+    return []
+
+
+def _dep_public_names(dep: str) -> list[str]:
+    """Legacy alias kept for compatibility."""
+    return _dep_known_names(dep)

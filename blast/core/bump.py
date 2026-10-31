@@ -59,7 +59,6 @@ def simulate_bump(repo_id: str, dep: str, target_version: str) -> BumpResult:
     # transitive_map: {path -> via_path} where via_path is the direct dep file it chains through
 
     # ── 2b. Get removed names so we can attach line hits ───────────────────
-    # Use "1.0" as the from-version (what's currently pinned)
     pinned_edge = edges_col().find_one({"repo_id": repo_id, "dep": dep}, {"version": 1})
     from_ver = pinned_edge["version"] if pinned_edge else "1.0"
     removed_names = diff_versions(dep, from_ver, target_version)
@@ -68,18 +67,30 @@ def simulate_bump(repo_id: str, dep: str, target_version: str) -> BumpResult:
     affected: list[dict] = []
     all_file_docs = list(files_col().find(
         {"repo_id": repo_id},
-        {"_id": 0, "path": 1, "dep_usages": 1}
+        {"_id": 0, "path": 1, "dep_usages": 1, "ingested_at": 1}
     ))
 
     direct_set = set(direct_files)
     transitive_set = set(transitive_map.keys()) - direct_set
 
+    # Build a lookup of the repo root so we can re-scan files on disk
+    import os, hashlib
+    # Try to recover repo root from repo_id (it's an md5 of the abs path —
+    # we can't reverse it, so scan by looking for the file relative to cwd)
+    repo_root = _find_repo_root(repo_id)
+
     for doc in all_file_docs:
         path = doc["path"]
         dep_usages = doc.get("dep_usages", {})
 
-        # Filter stored usages to only the removed names
+        # Try stored usages first; re-scan from disk if empty and we have removed names
         raw_usages = dep_usages.get(dep, [])
+        if not raw_usages and removed_names and repo_root:
+            abs_file = os.path.join(repo_root, path.replace("/", os.sep))
+            if os.path.exists(abs_file):
+                from blast.core.parser import find_name_usages
+                raw_usages = find_name_usages(abs_file, removed_names)
+
         risky_usages = [
             u for u in raw_usages if u.get("name") in removed_names
         ] if removed_names else raw_usages
@@ -249,3 +260,23 @@ def _topological_fix_order(repo_id: str, paths: set[str]) -> list[str]:
     # Append any remaining (cycle fallback)
     remaining = [p for p in sorted(paths) if p not in order]
     return order + remaining
+
+
+def _find_repo_root(repo_id: str) -> str | None:
+    """
+    Recover the repo root directory from the repo_id.
+    The repo_id is an md5 of the absolute path — we can't reverse it,
+    but we can check common locations relative to the working directory.
+    """
+    import os, hashlib
+    cwd = os.getcwd()
+    # Check direct subdirs of cwd
+    for entry in os.listdir(cwd):
+        candidate = os.path.join(cwd, entry)
+        if os.path.isdir(candidate):
+            if hashlib.md5(candidate.encode()).hexdigest()[:12] == repo_id:
+                return candidate
+    # Check cwd itself
+    if hashlib.md5(cwd.encode()).hexdigest()[:12] == repo_id:
+        return cwd
+    return None
