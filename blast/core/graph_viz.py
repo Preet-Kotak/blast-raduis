@@ -15,7 +15,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import networkx as nx
-from pyvis.network import Network
 
 
 # Node colours per label
