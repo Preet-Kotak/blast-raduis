@@ -22,6 +22,9 @@ build/
 sample_repo/
 pydantic_app/
 .pytest_cache/
+test_graph.png
+test_graph_gen.py
+graph_test_output.html
 
 # demo_repos/ and discord_bot/ are intentionally committed — needed for Streamlit Cloud one-click demos
 # do NOT add demo_repos/ or discord_bot/ here
