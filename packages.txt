@@ -1,2 +1,2 @@
-# System-level packages for Streamlit Community Cloud (apt-get)
-# Add any system dependencies here if needed
+zlib1g-dev
+libjpeg-dev
