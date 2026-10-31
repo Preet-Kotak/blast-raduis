@@ -20,6 +20,8 @@ build/
 
 # Test artefacts — generated locally, never committed
 sample_repo/
-discord_bot/
 pydantic_app/
 .pytest_cache/
+
+# demo_repos/ and discord_bot/ are intentionally committed — needed for Streamlit Cloud one-click demos
+# do NOT add demo_repos/ or discord_bot/ here
