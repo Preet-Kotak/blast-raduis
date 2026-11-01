@@ -27,6 +27,7 @@ try:
     DEMO_MODE = False
 except Exception:
     DEMO_MODE = True
+    from blast.core.migration_hints import get_hint
 
     def ingest_repo(path): return "demo-repo-001"
     def list_repos(): return [{"repo_id": "demo-repo-001", "path": "demo_repos/fakehttp_app", "file_count": 9}]
@@ -83,8 +84,20 @@ except Exception:
         plt.close(fig)
         buf.seek(0)
         return buf.getvalue()
-    def get_hints_for_file(pkg, usages): return [{**u, "hint": "Check migration guide.", "first_occurrence": True} for u in usages]
-    def get_unique_hints(pkg, names): return [{"name": n, "hint": "Check migration guide."} for n in names]
+    from blast.core.migration_hints import get_hint
+    def get_hints_for_file(pkg, usages):
+        enriched = []
+        seen_names = set()
+        for u in usages:
+            entry = dict(u)
+            name = u.get("name", "")
+            entry["hint"] = get_hint(pkg, name)
+            entry["first_occurrence"] = name not in seen_names
+            seen_names.add(name)
+            enriched.append(entry)
+        return enriched
+    def get_unique_hints(pkg, names):
+        return [{"name": name, "hint": get_hint(pkg, name)} for name in names]
     def scan_requirements(repo_id, repo_path): return [
         {"dep": "pydantic",  "current_ver": "1.10.0", "latest_ver": "2.14.2", "is_latest": False, "affected": 9,  "direct": 4, "transitive": 5, "risk": "HIGH",      "bump_id": "demo-bump-001"},
         {"dep": "fastapi",   "current_ver": "0.95.0", "latest_ver": "0.115.0","is_latest": False, "affected": 2,  "direct": 1, "transitive": 1, "risk": "MEDIUM",    "bump_id": "demo-bump-002"},
@@ -791,7 +804,8 @@ else:
                     if usages:
                         for u in usages:
                             c_line, c_name, c_code = st.columns([1, 2, 5])
-                            c_line.markdown(f"**line {u['line']}**")
+                            line_num = u.get('line', '?')
+                            c_line.markdown(f"**line {line_num}**")
                             c_name.markdown(f"`{u['name']}`")
                             c_code.code(u["snippet"], language="python")
                             if u.get("first_occurrence"):
@@ -887,8 +901,9 @@ else:
                     usages = f_data.get("usages", [])
                     st.markdown(f"**{i}.** `{path}`")
                     for u in usages[:3]:
+                        line_num = u.get('line', '?')
                         hint = get_unique_hints(dep_name, [u["name"]])[0]["hint"]
-                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;↳ line **{u['line']}** `{u['name']}` — *{hint}*")
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;↳ line **{line_num}** `{u['name']}` — *{hint}*")
 
             if transitive_order:
                 st.markdown("#### 🟡 Step 2 — Update these transitive files (after step 1)")
